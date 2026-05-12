@@ -1,0 +1,715 @@
+openapi: 3.1.0
+info:
+  title: Mnemo API
+  version: 0.1.0
+  description: Draft OpenAPI contract for the Mnemo memory service.
+servers:
+  - url: http://127.0.0.1:8787
+security:
+  - bearerAuth: []
+paths:
+  /v1/health:
+    get:
+      summary: Health check
+      security: []
+      responses:
+        "200":
+          description: Service status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+  /v1/events:
+    post:
+      summary: Ingest one event
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EventInput"
+      responses:
+        "200":
+          description: Event accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/events/batch:
+    post:
+      summary: Ingest a batch of events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchEventsRequest"
+      responses:
+        "200":
+          description: Batch accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/memories:
+    post:
+      summary: Create an explicit memory
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryCreateRequest"
+      responses:
+        "200":
+          description: Memory accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/query:
+    post:
+      summary: Query memories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/QueryRequest"
+      responses:
+        "200":
+          description: Query response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/context-pack:
+    post:
+      summary: Build a context pack
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ContextPackRequest"
+      responses:
+        "200":
+          description: Context pack response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/usage:
+    post:
+      summary: Record usage feedback
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UsageRequest"
+      responses:
+        "200":
+          description: Usage accepted
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/sessions/wrapup:
+    post:
+      summary: Create a session wrapup job
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WrapupRequest"
+      responses:
+        "200":
+          description: Wrapup job response
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/jobs:
+    get:
+      summary: List jobs
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/ThreadId"
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/Source"
+        - $ref: "#/components/parameters/Limit"
+        - $ref: "#/components/parameters/Cursor"
+      responses:
+        "200":
+          description: Jobs page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/jobs/{job_id}:
+    get:
+      summary: Get one job
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/ThreadId"
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/Source"
+      responses:
+        "200":
+          description: Job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/namespaces/status:
+    post:
+      summary: Read namespace status
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [namespace]
+              properties:
+                namespace:
+                  $ref: "#/components/schemas/Namespace"
+      responses:
+        "200":
+          description: Namespace status
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/namespaces/policy:
+    get:
+      summary: Get namespace policy
+      parameters:
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/ThreadId"
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/Source"
+      responses:
+        "200":
+          description: Policy
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+    put:
+      summary: Put namespace policy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyRequest"
+      responses:
+        "200":
+          description: Policy updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/memories/search:
+    post:
+      summary: Search memories
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Memories page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/memories/{memory_id}:
+    get:
+      summary: Get one memory
+      parameters:
+        - name: memory_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/ThreadId"
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/Source"
+      responses:
+        "200":
+          description: Memory
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+    patch:
+      summary: Patch one memory
+      parameters:
+        - name: memory_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: "#/components/parameters/TenantId"
+        - $ref: "#/components/parameters/UserId"
+        - $ref: "#/components/parameters/WorkspaceId"
+        - $ref: "#/components/parameters/ThreadId"
+        - $ref: "#/components/parameters/AgentId"
+        - $ref: "#/components/parameters/Source"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MemoryPatch"
+      responses:
+        "200":
+          description: Memory updated
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/events/search:
+    post:
+      summary: Search events
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SearchRequest"
+      responses:
+        "200":
+          description: Events page
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+  /v1/forget:
+    post:
+      summary: Forget memories
+      parameters:
+        - $ref: "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ForgetRequest"
+      responses:
+        "200":
+          description: Forget job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ObjectResponse"
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      schema:
+        type: string
+    TenantId:
+      name: tenant_id
+      in: query
+      required: false
+      schema:
+        type: string
+    UserId:
+      name: user_id
+      in: query
+      required: false
+      schema:
+        type: string
+    WorkspaceId:
+      name: workspace_id
+      in: query
+      required: false
+      schema:
+        type: string
+    ThreadId:
+      name: thread_id
+      in: query
+      required: false
+      schema:
+        type: string
+    AgentId:
+      name: agent_id
+      in: query
+      required: false
+      schema:
+        type: string
+    Source:
+      name: source
+      in: query
+      required: false
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      schema:
+        type: integer
+        minimum: 1
+        maximum: 200
+        default: 50
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      schema:
+        type: string
+  schemas:
+    ObjectResponse:
+      type: object
+      required: [ok]
+      properties:
+        ok:
+          type: boolean
+      additionalProperties: true
+    ErrorResponse:
+      type: object
+      required: [ok, error]
+      properties:
+        ok:
+          type: boolean
+          const: false
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+            message:
+              type: string
+            request_id:
+              type:
+                - string
+                - "null"
+    HealthResponse:
+      type: object
+      required: [ok, service, version]
+      properties:
+        ok:
+          type: boolean
+          const: true
+        service:
+          type: string
+          const: mnemo
+        version:
+          type: string
+    Namespace:
+      type: object
+      properties:
+        tenant_id:
+          type: string
+        user_id:
+          type: string
+        workspace_id:
+          type: string
+        thread_id:
+          type: string
+        agent_id:
+          type: string
+        source:
+          type: string
+    PageRequest:
+      type: object
+      properties:
+        limit:
+          type: integer
+          default: 50
+          minimum: 1
+          maximum: 200
+        cursor:
+          type:
+            - string
+            - "null"
+    PageInfo:
+      type: object
+      required: [limit, has_more]
+      properties:
+        limit:
+          type: integer
+        next_cursor:
+          type:
+            - string
+            - "null"
+        has_more:
+          type: boolean
+    QueryFilters:
+      type: object
+      properties:
+        memory_types:
+          type: array
+          items:
+            type: string
+        origins:
+          type: array
+          items:
+            type: string
+        importance:
+          type: array
+          items:
+            type: string
+        status:
+          type: array
+          items:
+            type: string
+        entity_ids:
+          type: array
+          items:
+            type: string
+        relation_types:
+          type: array
+          items:
+            type: string
+      additionalProperties: true
+    EventInput:
+      type: object
+      required: [event_id, namespace, content]
+      properties:
+        event_id:
+          type: string
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        event_type:
+          type: string
+        type:
+          type: string
+        role:
+          type: string
+        content:
+          type: string
+        occurred_at:
+          type: string
+        memory_hints:
+          type: object
+          properties:
+            eligible:
+              type: boolean
+            external_context:
+              type: boolean
+        metadata:
+          type: object
+          additionalProperties: true
+    BatchEventsRequest:
+      type: object
+      required: [namespace, events]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        events:
+          type: array
+          items:
+            $ref: "#/components/schemas/EventInput"
+    MemoryCreateRequest:
+      type: object
+      required: [namespace, content]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        content:
+          type: string
+        memory_type:
+          type: string
+          default: fact
+        importance:
+          type: string
+          default: normal
+        source_event_id:
+          type: string
+        conflict_key:
+          type: string
+        valid_from:
+          type: string
+        valid_until:
+          type: string
+        supersedes:
+          type: array
+          items:
+            type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        idempotency_key:
+          type: string
+    QueryScope:
+      type: object
+      properties:
+        include_thread:
+          type: boolean
+        include_workspace:
+          type: boolean
+        include_user:
+          type: boolean
+        include_tenant:
+          type: boolean
+    QueryRequest:
+      type: object
+      required: [namespace]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        query:
+          type: string
+        as_of:
+          type: string
+        temporal_scope:
+          type: string
+          enum: [current, historical, all]
+        filters:
+          $ref: "#/components/schemas/QueryFilters"
+        scope:
+          $ref: "#/components/schemas/QueryScope"
+        limit:
+          type: integer
+        response_format:
+          type: string
+    ContextPackRequest:
+      type: object
+      required: [namespace]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        purpose:
+          type: string
+        budget:
+          type: object
+          properties:
+            max_tokens:
+              type: integer
+    UsageRequest:
+      type: object
+      required: [namespace, used_items]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        idempotency_key:
+          type: string
+        usage_batch_id:
+          type: string
+        response_id:
+          type: string
+        source_requests:
+          type: array
+          items:
+            type: object
+        used_items:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        metadata:
+          type: object
+          additionalProperties: true
+    WrapupRequest:
+      type: object
+      required: [namespace]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        idempotency_key:
+          type: string
+        reason:
+          type: string
+        event_range:
+          type: object
+          additionalProperties: true
+        wait:
+          type: boolean
+        timeout_ms:
+          type: integer
+        extraction_instructions:
+          type: string
+          maxLength: 2000
+          description: Optional custom instructions injected into the extraction prompt. Overrides the namespace policy value for this request.
+    PolicyRequest:
+      type: object
+      required: [namespace, policy]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        policy:
+          type: object
+          additionalProperties: true
+    SearchRequest:
+      type: object
+      required: [namespace]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        query:
+          type: string
+        filters:
+          $ref: "#/components/schemas/QueryFilters"
+        pagination:
+          $ref: "#/components/schemas/PageRequest"
+    MemoryPatch:
+      type: object
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        content:
+          type: string
+        importance:
+          type: string
+        status:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+    ForgetRequest:
+      type: object
+      required: [namespace, target]
+      properties:
+        namespace:
+          $ref: "#/components/schemas/Namespace"
+        idempotency_key:
+          type: string
+        target:
+          type: object
+          required: [memory_ids]
+          properties:
+            memory_ids:
+              type: array
+              items:
+                type: string
+        mode:
+          type: string
+          default: soft_delete
+        reason:
+          type: string

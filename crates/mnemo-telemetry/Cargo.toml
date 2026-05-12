@@ -1,0 +1,9 @@
+[package]
+name = "mnemo-telemetry"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+tracing-subscriber.workspace = true
+

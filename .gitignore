@@ -1,0 +1,10 @@
+/target/
+Cargo.lock
+
+.idea
+
+*.db
+*.db-shm
+*.db-wal
+
+mnemo-artifacts/

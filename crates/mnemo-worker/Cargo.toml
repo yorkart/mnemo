@@ -1,0 +1,11 @@
+[package]
+name = "mnemo-worker"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+mnemo-application = { path = "../mnemo-application" }
+tokio.workspace = true
+tracing.workspace = true

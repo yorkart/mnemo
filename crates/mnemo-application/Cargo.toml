@@ -1,0 +1,13 @@
+[package]
+name = "mnemo-application"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+async-trait.workspace = true
+mnemo-domain = { path = "../mnemo-domain" }
+mnemo-ports = { path = "../mnemo-ports" }
+serde_json.workspace = true
+tracing.workspace = true
+uuid.workspace = true
