@@ -33,22 +33,12 @@ use rusqlite::types::Type;
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
-use crate::ConflictResolveOutcome;
-use crate::ConflictStore;
-use crate::ContextPackCacheStore;
-use crate::EventAppendOutcome;
-use crate::EventStore;
-use crate::ForgetOutcome;
-use crate::ForgetStore;
-use crate::JobStore;
-use crate::MemoryConflict;
-use crate::MemoryStore;
-use crate::MemoryWriteOutcome;
-use crate::PolicyStore;
+use crate::traits::{
+    ConflictResolveOutcome, ConflictStore, ContextPackCacheStore, EventAppendOutcome, EventStore,
+    ForgetOutcome, ForgetStore, JobStore, MemoryConflict, MemoryStore, MemoryWriteOutcome,
+    PolicyStore, SessionSummaryStore, ThreadStateStore, UsageStore,
+};
 use crate::SQLITE_INIT_SQL;
-use crate::SessionSummaryStore;
-use crate::ThreadStateStore;
-use crate::UsageStore;
 
 #[derive(Debug)]
 pub struct SqliteStore {
