@@ -1,15 +1,17 @@
-use std::net::TcpListener;
-use std::net::TcpStream;
 use std::sync::Arc;
 
+use axum::Router;
+use axum::extract::State;
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
 use mnemo_core::MnemoError;
-use mnemo_core::MnemoResult;
 use mnemo_store::InMemoryStore;
 use mnemo_store::MnemoStore;
 use mnemo_store::SqliteStore;
 
 use crate::config::ServerConfig;
-use crate::http::{HttpRequest, read_http_request, write_response};
+use crate::http::{HttpRequest, HttpStatus};
 use crate::router::handle_request;
 use crate::wrapup::{CommandWrapupProvider, RuleWrapupProvider, WrapupProvider};
 
@@ -47,7 +49,7 @@ impl ApiState {
         }
     }
 
-    pub(crate) fn authorize(&self, request: &HttpRequest) -> MnemoResult<()> {
+    pub(crate) fn authorize(&self, request: &HttpRequest) -> Result<(), MnemoError> {
         let Some(expected) = self.bearer_token.as_deref() else {
             return Ok(());
         };
@@ -74,7 +76,6 @@ impl ApiState {
 }
 
 pub fn serve_blocking(config: ServerConfig) -> std::io::Result<()> {
-    let listener = TcpListener::bind(&config.bind_address)?;
     let wrapup_command = config.wrapup_command.clone();
     let state = if let Some(path) = config.sqlite_path {
         let store = SqliteStore::open(path).map_err(std::io::Error::other)?;
@@ -94,10 +95,21 @@ pub fn serve_blocking(config: ServerConfig) -> std::io::Result<()> {
             wrapup_command,
         )?)
     };
-    for stream in listener.incoming() {
-        handle_stream(stream?, Arc::clone(&state))?;
-    }
-    Ok(())
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(std::io::Error::other)?;
+
+    runtime.block_on(async move {
+        let listener = tokio::net::TcpListener::bind(&config.bind_address).await?;
+        let app = Router::new()
+            .route("/{*path}", any(axum_handler))
+            .with_state(state);
+        axum::serve(listener, app)
+            .await
+            .map_err(std::io::Error::other)
+    })
 }
 
 fn api_state_for_store<S>(
@@ -118,8 +130,45 @@ where
     })
 }
 
-fn handle_stream(mut stream: TcpStream, state: Arc<ApiState>) -> std::io::Result<()> {
-    let request = read_http_request(&mut stream)?;
-    let response = handle_request(&state, &request);
-    write_response(&mut stream, response.status, &response.body)
+async fn axum_handler(
+    State(state): State<Arc<ApiState>>,
+    request: axum::extract::Request,
+) -> Response {
+    let (parts, body) = request.into_parts();
+    let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                crate::responses::error_response_json(
+                    "bad_request",
+                    &format!("invalid request body: {error}"),
+                ),
+            )
+                .into_response();
+        }
+    };
+
+    let mut http_request =
+        HttpRequest::new(parts.method.as_str(), parts.uri.path(), body_bytes.to_vec());
+    for (name, value) in &parts.headers {
+        if let Ok(value) = value.to_str() {
+            http_request = http_request.with_header(name.as_str(), value);
+        }
+    }
+
+    let response = handle_request(&state, &http_request);
+    (status_to_axum(response.status), response.body).into_response()
+}
+
+fn status_to_axum(status: HttpStatus) -> StatusCode {
+    match status {
+        HttpStatus::Ok => StatusCode::OK,
+        HttpStatus::BadRequest => StatusCode::BAD_REQUEST,
+        HttpStatus::Unauthorized => StatusCode::UNAUTHORIZED,
+        HttpStatus::Forbidden => StatusCode::FORBIDDEN,
+        HttpStatus::NotFound => StatusCode::NOT_FOUND,
+        HttpStatus::Conflict => StatusCode::CONFLICT,
+        HttpStatus::InternalServerError => StatusCode::INTERNAL_SERVER_ERROR,
+    }
 }
