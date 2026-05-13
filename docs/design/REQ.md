@@ -73,6 +73,53 @@ Mnemo 不做通用知识库，也不做 RAG 平台。
 
 调用方可以把外部知识检索结果作为某次交互事件的一部分写入 Mnemo，但必须标记为外部上下文。外部上下文默认不应沉淀为长期用户记忆，除非用户明确要求记住其中的某个结论。
 
+### 2.3 使用方交互图
+
+使用方通常是 Agent Runtime、客户端服务、CLI、IDE 插件或 Codex 适配插件。Mnemo 不负责接管主对话流程，也不直接写入某个具体 Agent 的本地记忆目录；它只提供事件接收、记忆整理和可注入 context pack。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    actor User as User
+    participant App as Agent Runtime / Plugin
+    participant Mnemo as Mnemo API
+    participant Log as Event Log
+    participant Worker as Memory Worker
+    participant Store as Memory Store
+
+    App->>Mnemo: POST /v1/context-pack
+    Mnemo->>Store: read active memory and context cache
+    Store-->>Mnemo: current context pack
+    Mnemo-->>App: injectable context pack
+    App->>User: run agent with injected context
+
+    User->>App: user message / task event
+    App->>Mnemo: POST /v1/events
+    Mnemo->>Log: append raw event idempotently
+    Mnemo-->>App: event accepted
+
+    App->>Mnemo: POST /v1/threads/memory-mode
+    Mnemo->>Store: persist enabled / disabled / polluted
+    Mnemo-->>App: mode updated
+
+    App->>Mnemo: POST /v1/sessions/wrapup
+    Mnemo-->>App: job accepted
+    Worker->>Log: read event range
+    Worker->>Store: write session summary and canonical memory
+    Worker->>Store: refresh or invalidate context pack
+
+    App->>Mnemo: POST /v1/usage
+    Mnemo->>Store: record item usage and citations
+```
+
+交互边界要求：
+
+- 使用方负责决定在主 Agent 的哪个上下文区域注入 context pack。
+- 使用方负责把主路径产生的用户消息、Agent 回复和关键工具摘要写入事件。
+- 使用方负责在会话结束、压缩前、任务阶段完成时触发 wrapup。
+- 使用方负责把本地插件、Codex 目录同步或其他 Agent 私有协议适配到 Mnemo API。
+- Mnemo 负责保证事件可靠写入、异步整理、冲突处理、context pack 生成和使用反馈记录。
+
 ## 3. 核心原则
 
 ### 3.1 原始事件是事实源
@@ -176,12 +223,17 @@ Event 是用户交互中的原始事实单元。
 
 - `user_message`
 - `agent_message`
+- `assistant_final`
 - `tool_summary`
+- `tool_result_summary`
 - `task_summary`
+- `context_injected`
 - `system_event`
 - `explicit_remember`
 - `explicit_forget`
 - `session_summary`
+
+对于 Codex 这类调用方，一次 turn 至少应能用事件表达关键输入输出：`context_injected` 记录本轮注入的 context pack 版本和位置，`user_message` 记录用户输入，`tool_result_summary` 记录关键工具结果摘要，`assistant_final` 记录最终对用户可见的回复。这样 Mnemo 后续整理时可以重建“本轮 Agent 基于哪些记忆、工具结果和用户输入做出了什么输出”。
 
 事件要求：
 
@@ -191,7 +243,72 @@ Event 是用户交互中的原始事实单元。
 - 服务端写入时分配内部递增位置，用于整理进度。
 - 事件默认不直接注入主 Agent prompt。
 
-### 4.3 Memory
+### 4.3 Thread 与 Memory Mode
+
+Thread 表示一条连续对话或任务上下文。Session 表示一次可整理的阶段窗口，通常由一段事件范围构成。一个 thread 可以包含多个 session。
+
+Mnemo 需要支持 thread/session 级 memory mode，用于控制该上下文是否参与自动记忆生成。
+
+建议状态：
+
+- `enabled`：允许从该 thread/session 的事件中自动整理记忆。
+- `disabled`：不从该 thread/session 自动生成记忆，但仍可保留原始事件用于审计和显式查询。
+- `polluted`：该 thread/session 已混入外部上下文或不适合长期沉淀的信息，默认不参与自动长期记忆生成。
+
+触发规则：
+
+- 用户或调用方可以显式把 thread memory mode 设置为 `disabled`。
+- 当事件或工具结果被标记为 `external_context=true`，且 policy 不允许外部上下文沉淀时，相关 thread/session 可以被标记为 `polluted`。
+- `polluted` 不等于删除；它表示自动整理应跳过或只生成低信任、不可默认注入的结果。
+- 显式记忆请求可以独立于 thread mode 接收，但必须保留来源和用户意图。
+
+要求：
+
+- Event 写入不因 memory mode 关闭而失败。
+- `disabled` / `polluted` 的 thread 默认不参与 inferred memory 生成。
+- Context pack 读取已有 active memory 与自动生成新 memory 是两件事，应由 policy 分开控制。
+- 管理 API 应能查看和修改 thread/session memory mode。
+
+### 4.4 Session Summary
+
+Session Summary 是某个事件范围整理后的阶段性摘要。它是长期记忆整理的中间层，不等同于最终 canonical memory。
+
+建议字段：
+
+```json
+{
+  "session_summary_id": "sum-001",
+  "namespace": {},
+  "thread_id": "t1",
+  "event_range": {
+    "from_event_id": "evt-001",
+    "to_event_id": "evt-120"
+  },
+  "summary": "本阶段讨论了 Mnemo 的定位和 context pack 设计。",
+  "raw_memory": "可供后续整理使用的详细阶段记忆，包含偏好、决策、操作结果和证据。",
+  "slug": "mnemo_context_pack_positioning",
+  "status": "active",
+  "generated_at": "2026-05-13T10:10:00+08:00",
+  "usage_count": 0,
+  "last_used_at": null,
+  "source_event_ids": ["evt-001", "evt-120"]
+}
+```
+
+用途：
+
+- 作为从 raw events 到 canonical memory 的中间产物。
+- 支持后续全局整理、合并、冲突处理和记忆重建。
+- 作为 provenance 的一部分，解释某条 memory 来自哪次会话阶段。
+- 支持保留策略和 usage feedback，避免无用旧摘要长期参与整理。
+
+要求：
+
+- Wrapup 任务应能输出 session summary。
+- Session Summary 可被重新生成或更新，但需要保留版本、来源和处理范围。
+- Session Summary 不应直接等同于主路径 context pack；它是整理输入和证据层。
+
+### 4.5 Memory
 
 Memory 是从事件中整理出的长期记忆，或用户明确要求记住的内容。
 
@@ -232,7 +349,7 @@ Memory 应表达当前有效状态，而不是简单记录每次说过的话。
 - `forgotten` 记忆不应再被普通查询或整理任务恢复。
 - `conflict_key` 用于表达同一类偏好、事实或指令的冲突槽位。
 
-### 4.4 Canonical Memory
+### 4.6 Canonical Memory
 
 Canonical Memory 是当前有效、可注入的记忆视图。
 
@@ -249,9 +366,11 @@ Canonical：
 - 用户当前最喜欢的水果是苹果。
 ```
 
-### 4.5 Context Pack
+### 4.7 Context Pack
 
 Context Pack 是 Mnemo 给主 Agent 的主要输出。
+
+对主路径注入而言，Context Pack 的 `content` 是唯一推荐读取产物。调用方不应把 raw memory search、session summary 或内部整理结果作为主路径上下文来源；对于 Codex 这类已有本地 `memory_summary.md` 的使用方，`content` 可以作为替代该本地 summary 文件的数据源，是否落盘或同步到本地目录由调用方插件负责。
 
 它包含：
 
@@ -263,7 +382,7 @@ Context Pack 是 Mnemo 给主 Agent 的主要输出。
 
 Context Pack 不是完整记忆列表，而是一次主路径执行需要的稳定上下文。
 
-### 4.6 Provenance
+### 4.8 Provenance
 
 Provenance 表示记忆来源。
 
@@ -274,10 +393,11 @@ Provenance 表示记忆来源。
 - 来源 namespace。
 - 生成或人工修改记录。
 - 替代关系和冲突关系。
+- 关联的 session summary。
 
 Provenance 用于审计和调试，不要求全部注入主 Agent prompt。
 
-### 4.7 Usage Feedback
+### 4.9 Usage Feedback
 
 Usage Feedback 是调用方上报的实际使用结果。
 
@@ -428,6 +548,7 @@ CLI 应覆盖：
 | `POST` | `/v1/events/batch` | 批量写入交互事件 | 是 |
 | `POST` | `/v1/memories` | 显式写入记忆 | 是 |
 | `POST` | `/v1/context-pack` | 获取可注入上下文 | 是 |
+| `POST` | `/v1/threads/memory-mode` | 设置 thread/session 记忆生成模式 | 是 |
 | `POST` | `/v1/sessions/wrapup` | 触发会话整理 | 是 |
 | `GET` | `/v1/jobs` | 查询任务列表 | 否 |
 | `GET` | `/v1/jobs/{job_id}` | 查询任务状态 | 否 |
@@ -435,6 +556,8 @@ CLI 应覆盖：
 | `POST` | `/v1/memories/search` | 管理搜索记忆 | 否 |
 | `GET` | `/v1/memories/{memory_id}` | 获取记忆详情 | 否 |
 | `PATCH` | `/v1/memories/{memory_id}` | 人工修正记忆 | 否 |
+| `POST` | `/v1/session-summaries/search` | 管理搜索会话摘要 | 否 |
+| `GET` | `/v1/session-summaries/{session_summary_id}` | 获取会话摘要详情 | 否 |
 | `POST` | `/v1/events/search` | 搜索原始事件 | 否 |
 | `POST` | `/v1/namespaces/status` | 查看 namespace 状态 | 否 |
 | `GET` | `/v1/namespaces/policy` | 查看策略 | 否 |
@@ -665,7 +788,47 @@ POST /v1/context-pack
 - 支持缓存；缓存命中应低延迟。
 - 生成失败时，如果存在可接受的 stale pack，可以返回 stale 并标记。
 
-### 7.6 会话整理
+### 7.6 设置 Thread Memory Mode
+
+```http
+POST /v1/threads/memory-mode
+```
+
+请求示例：
+
+```json
+{
+  "namespace": {
+    "tenant_id": "default",
+    "user_id": "u1",
+    "workspace_id": "w1",
+    "thread_id": "t1"
+  },
+  "mode": "polluted",
+  "reason": "external_context",
+  "source_event_id": "evt-099"
+}
+```
+
+响应示例：
+
+```json
+{
+  "ok": true,
+  "thread_id": "t1",
+  "mode": "polluted",
+  "updated_at": "2026-05-13T10:10:00+08:00"
+}
+```
+
+要求：
+
+- 支持 `enabled`、`disabled`、`polluted`。
+- 该接口只控制自动记忆生成资格，不删除已写入事件。
+- 进入 `polluted` 后，后续自动 wrapup 默认应跳过 inferred memory 生成，除非请求或 policy 显式覆盖。
+- 调用方可以用该接口把外部上下文污染、用户关闭记忆、敏感任务等状态持久化到 Mnemo。
+
+### 7.7 会话整理
 
 ```http
 POST /v1/sessions/wrapup
@@ -685,6 +848,10 @@ POST /v1/sessions/wrapup
   "event_range": {
     "from_event_id": "evt-001",
     "to_event_id": "evt-120"
+  },
+  "output": {
+    "generate_session_summary": true,
+    "generate_context_pack": true
   },
   "wait": false,
   "timeout_ms": 0
@@ -710,8 +877,10 @@ POST /v1/sessions/wrapup
 - 生成或更新 canonical memory。
 - 更新 context pack 缓存或标记缓存失效。
 - 输出 continuation summary。
+- 输出 session summary，并把它作为后续 canonical memory 整理的证据层。
+- 如果 thread/session memory mode 是 `disabled` 或 `polluted`，默认只生成必要的 continuation summary，不生成 inferred long-term memory。
 
-### 7.7 Job 状态
+### 7.8 Job 状态
 
 ```http
 GET /v1/jobs/{job_id}
@@ -734,12 +903,22 @@ GET /v1/jobs/{job_id}
     "updated_count": 2,
     "superseded_count": 1,
     "conflict_count": 0,
-    "continuation_summary": "本阶段明确了 Mnemo 的核心定位：用户交互记忆管理和可注入上下文。"
+    "session_summary": {
+      "session_summary_id": "sum-001",
+      "summary": "本阶段明确了 Mnemo 的核心定位：用户交互记忆管理和可注入上下文。",
+      "raw_memory": "用户认同 Mnemo 应偏上下文决策层；用户明确要求不做通用知识库或 RAG；后续要覆盖 Codex 记忆读写语义。",
+      "slug": "mnemo_context_memory_requirements"
+    },
+    "continuation_summary": "本阶段明确了 Mnemo 的核心定位：用户交互记忆管理和可注入上下文。",
+    "context_pack": {
+      "context_pack_id": "ctx-002",
+      "version": "ctxv-002"
+    }
   }
 }
 ```
 
-### 7.8 使用反馈
+### 7.9 使用反馈
 
 ```http
 POST /v1/usage
@@ -768,6 +947,15 @@ POST /v1/usage
       "usage": "injected",
       "usefulness": "positive"
     }
+  ],
+  "citations": [
+    {
+      "source_type": "memory",
+      "memory_id": "mem-001",
+      "session_summary_id": "sum-001",
+      "event_ids": ["evt-001"],
+      "note": "used to preserve user preference for Chinese technical answers"
+    }
   ]
 }
 ```
@@ -778,11 +966,15 @@ POST /v1/usage
 - 反馈用于排序、保留和整理。
 - 支持 `positive`、`neutral`、`negative`。
 - 支持 `injected`、`used`、`ignored`、`rejected`。
+- 支持 citation 上报，调用方可以把本地文件引用、context pack item、memory、session summary 或 source event 映射回 Mnemo。
+- Citation 至少应能表达 `source_type`、`memory_id`、`session_summary_id`、`event_ids`、`note`。
+- 如果使用方有自己的本地文件路径或行号，可以通过 `metadata` 透传；Mnemo 不要求理解该文件布局。
 
-### 7.9 管理搜索
+### 7.10 管理搜索
 
 ```http
 POST /v1/memories/search
+POST /v1/session-summaries/search
 POST /v1/events/search
 ```
 
@@ -792,10 +984,11 @@ POST /v1/events/search
 
 - 不建议主 Agent 直接使用 raw search 结果注入 prompt。
 - 搜索结果必须返回状态、来源和替代关系。
+- Session summary 搜索结果必须返回 `event_range`、`thread_id`、`summary`、`raw_memory`、`usage_count` 和 `last_used_at`。
 - 默认不返回 forgotten 内容。
 - 管理场景可显式请求 `include_inactive`、`include_conflicted`、`include_superseded`。
 
-### 7.10 遗忘
+### 7.11 遗忘
 
 ```http
 POST /v1/forget
@@ -900,12 +1093,20 @@ Namespace policy 控制整理和上下文生成行为。
 {
   "auto_organize": true,
   "auto_generate_memories": true,
+  "auto_use_memories": true,
   "context_pack_max_tokens": 1200,
   "raw_events_retention": "180d",
   "memory_retention": "365d",
+  "session_summary_retention": "90d",
   "keep_explicit_memories": true,
   "conflict_resolution_mode": "conservative",
   "external_context_policy": "do_not_persist",
+  "max_session_summaries_for_consolidation": 512,
+  "max_unused_days": 30,
+  "max_thread_age_days": 30,
+  "max_threads_per_maintenance_pass": 64,
+  "min_thread_idle_duration": "12h",
+  "min_rate_limit_remaining_percent": 20,
   "compaction": {
     "aggressiveness": "balanced"
   }
@@ -918,6 +1119,13 @@ Namespace policy 控制整理和上下文生成行为。
 - 默认使用 `conservative`。
 - `external_context_policy` 建议支持 `do_not_persist`、`persist_if_explicit`。
 - 显式记忆默认不被普通保留策略删除。
+- `auto_generate_memories` 控制是否从事件和 session summary 中自动推断长期记忆。
+- `auto_use_memories` 控制 context pack 是否默认使用当前 namespace 的 active memory。
+- `max_session_summaries_for_consolidation` 限制单次全局整理读取的阶段摘要数量。
+- `max_unused_days` 用于让长期未被使用的 session summary 或 memory 降权、归档或不再参与整理。
+- `max_thread_age_days` 用于限制自动整理扫描的历史 thread 范围。
+- `max_threads_per_maintenance_pass` 和 `min_thread_idle_duration` 用于控制后台整理负载，并避免过早整理仍在活跃变化的会话。
+- `min_rate_limit_remaining_percent` 用于保护主模型额度，额度不足时可以跳过后台整理。
 - 策略继承可以按 tenant、user、workspace、thread 层级定义，第一阶段只需支持直接配置。
 
 ## 10. 安全与隐私
@@ -935,10 +1143,12 @@ Namespace policy 控制整理和上下文生成行为。
 - `memories:write`
 - `memories:read`
 - `memories:manage`
+- `summaries:read`
 - `usage:write`
 - `jobs:read`
 - `policy:read`
 - `policy:write`
+- `threads:manage`
 - `forget:write`
 
 ### 10.2 Prompt Injection 防护
@@ -968,6 +1178,8 @@ Event、Memory 和 Context Pack 内容都应被视为不可信数据。
 逻辑上至少需要：
 
 - Event Store：事实源。
+- Thread State Store：thread/session memory mode 和整理进度。
+- Session Summary Store：会话阶段摘要和中间记忆层。
 - Memory Store：当前记忆和历史状态。
 - Job Store：异步整理任务。
 - Usage Store：使用反馈。
@@ -1014,6 +1226,7 @@ Event、Memory 和 Context Pack 内容都应被视为不可信数据。
 - 请求 ID。
 - job 状态。
 - 整理统计。
+- thread/session memory mode。
 - context pack 版本。
 - 缓存命中和 stale 标记。
 - 失败原因。
@@ -1023,9 +1236,11 @@ Event、Memory 和 Context Pack 内容都应被视为不可信数据。
 要求：
 
 - Memory 详情可查看来源事件。
+- Memory 详情可查看来源 session summary。
 - Supersession 可追踪。
 - Conflict 可查看涉及记忆。
 - Context pack item 可关联 memory。
+- Usage citation 可关联到 memory、session summary 或 source event。
 
 ## 13. CLI 需求
 
@@ -1042,12 +1257,15 @@ mnemo health
 mnemo event add --namespace default/u1/w1/t1 --role user --text "以后我都喜欢苹果了"
 mnemo event batch --namespace default/u1/w1/t1 --file transcript.jsonl
 mnemo remember --namespace default/u1/w1 --text "用户偏好简体中文"
+mnemo thread memory-mode set --namespace default/u1/w1/t1 --mode polluted
 mnemo context --namespace default/u1/w1/t1 --purpose task_start --max-tokens 1200
 mnemo wrapup --namespace default/u1/w1/t1
 mnemo job get job-001
 mnemo memory search --namespace default/u1/w1 --q "中文"
 mnemo memory get mem-001
 mnemo memory patch mem-001 --status inactive
+mnemo summary search --namespace default/u1/w1 --q "上下文决策层"
+mnemo summary get sum-001
 mnemo event search --namespace default/u1/w1/t1 --q "苹果"
 mnemo usage report --context-pack ctx-001 --memory-id mem-001 --usefulness positive
 mnemo forget --namespace default/u1/w1 --memory-id mem-001
@@ -1068,13 +1286,15 @@ mnemo policy set --namespace default/u1/w1 --context-pack-max-tokens 1200
 第一阶段必须实现：
 
 - Event 写入和批量写入。
+- Thread/session memory mode：enabled、disabled、polluted。
 - 显式 Memory 写入。
+- Session Summary 生成和存储。
 - 基础 Memory 状态模型：active、superseded、conflicted、forgotten。
 - Context Pack 生成。
 - Wrapup 异步任务框架。
 - 基础整理：从事件生成记忆、更新 active memory。
 - 基础冲突槽位：`conflict_key`、`supersedes`、`superseded_by`。
-- Usage feedback。
+- Usage feedback，包括 context pack item、memory、session summary 和 source event citation。
 - Memory/Event 管理搜索。
 - Forget。
 - Namespace 权限。
@@ -1096,6 +1316,9 @@ mnemo policy set --namespace default/u1/w1 --context-pack-max-tokens 1200
 - 用户后续说“以后改成 Y”后，context pack 只包含当前有效的 Y，不同时注入 X 和 Y。
 - 原始 event 写入在模型不可用时仍然成功。
 - Wrapup 失败可重试，不破坏已写入 event。
+- Wrapup 能生成 session summary，并能基于 session summary 更新 canonical memory。
+- Thread 被标记为 `polluted` 后，默认不从该 thread 自动生成 inferred long-term memory。
+- Usage feedback 能记录一次 context pack 中被实际使用的 memory 和来源摘要。
 - Forget 后，context pack 不再包含被遗忘记忆，后续整理也不会重新生成等价记忆。
 - 没有向量库时，系统仍然可以基于 canonical memory 生成可用 context pack。
 
